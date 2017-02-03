@@ -1,0 +1,141 @@
+---
+title: "Physical Activity: Predicting the Activity Class"
+author: "Aniruddha Amrite"
+date: "February 3, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Summary
+
+**Aim**: The aim of this work was to classify/predict how a particular physical activity was performed using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. 
+
+**Method**: Datasets from the human activity recognition (HAR) at http://groupware.les.inf.puc-rio.br/har were used for this analysis. The training dataset consisted of 19622 observations of 160 variables on 6 subjects. The training dataset was first cleaned to remove variables that had near zero variance. Further cleaning was done to remove variables which had >90% of the observations as NA. Once the final clean training dataset was obtained it was split into a training dataset with 70% of the records and a validation dataset with 30% of the records. A random forest based classification approach was used to classify the activity using all the variables in the training dataset. The final model was then used to predict the activity type for the validation dataset and the accuracy of the predictions was checked. Finally the model was used to predict 20 test cases for classification.
+
+**Results**: The final training dataset had 13870 observations and 53 predictors whereas the validation dataset had 5752 observations. The "accuracy" was used to select the model and the optimal model had a mtry value of 29. When the model developed on the training dataset was used on the validation dataset the accuracy of predictions was 99.27% (95% CI: 99.01 to 99.47 %). The model predicted all  the test cases correctly. 
+
+**Conclusion**: The random forest model predicted with high accuracy which class of physical activity did a observation belong to using data from accelerometers as predictors. 
+
+### Datasets
+
+The datasets were obtained from the HAR data at http://groupware.les.inf.puc-rio.br/har. For this analysis two datasets testSet and trainSet with 20 and 19622 observations respectively and each with 160 variables were downloaded and read into a csv format.
+
+```{r datasets, warning=FALSE, message=FALSE, results="hide"}
+library(caret)
+library(data.table)
+library(corrplot)
+library(randomForest)
+library(knitr)
+url1<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+url2<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+
+#download.file(url1, destfile = "./trainSet.csv")
+#download.file(url2, destfile = "./testSet.csv")
+
+trainSet<-read.csv("H:/Personal/Continuing Education/Data Scientist Specialization/Practical Machine Learning/trainSet.csv")
+testSet<-read.csv("H:/Personal/Continuing Education/Data Scientist Specialization/Practical Machine Learning/testSet.csv")
+```
+
+### Cleaning and pre-processing of datasets
+
+The trainSet dataset was used for developing a model to predict the activity type. The train data had a large number of variables. There were several variables that had very few unique values. The variables with zero or near zero variance were  identified with the nearZeroVar function and then removed from the dataset.  
+
+```{r nearZeroVariance, results="hide"}
+nzv <- nearZeroVar(trainSet, saveMetrics= TRUE) # creates a dataframe with zero and near zero variance logical 
+nzv[nzv$nzv,][1:10,]## display the first 10 rec
+sum(nzv$nzv)# find the number of variables that are near 
+notzerovar<-nzv$rn[nzv$nzv==F]## create a vector of variables which do not have a near zero variance
+trainSet2<-trainSet[,notzerovar]# subset the trainSet to only keep variables that do not have near zero variance
+```
+There were 60 variables in the dataset that had near zero variance. These variables were removed from the dataset.
+A lot of variables in the dataset have significant proportion of misssing (NA) data. A function NAprop was defined to find out which variables had >90% of the values as "NA". These variables were identified and removed from the dataset.
+
+The variables "X", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp" were variables which were not good predictors as they are just increasing in value within a subject record with increase in time. These variables were also removed from the dataset.
+
+```{r lotofNAs, results="hide"}
+## define a function to figure which variables have >90% of the values as NA
+NAprop<-function(x, prop=0.9){
+    num<-sum(is.na(x))
+    propNA<-num/length(x)
+    ifelse(propNA>prop, TRUE, FALSE)
+}
+
+# apply the function to the trainSet2 and get a dataframe as an output with the variable name and a logical vector indicating if the variable has >90% values NA
+res<-as.data.frame(cbind(names(trainSet2),sapply(trainSet2, NAprop))) 
+res2<-res[res$V2==FALSE,] # filter the res dataset to only include 
+
+var<-as.character(res2$V1)# a vector of the column names to include in the dataset
+
+trainSet3<-trainSet2[,var] # dataset with the variables that have significant prop of NAs removed
+
+colrem<-c("X", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "num_window")
+trainSet3<- trainSet3[,-which(names(trainSet3)%in% colrem)]## removes the specified named columns
+
+```
+
+### Preparing Training and Validation datasets
+Once the dataset with the required variables was finalized, the dataset was randomly split into 2 datasets; one with 70% of the observations was used as the training dataset whereas the other with 30% observations was used as the validation dataset. The resulting training dataset has 13870 observations whereas the validation dataset has 5752 observations.
+
+```{r}
+library(caret)
+set.seed(123)
+intrain<-sample(2, nrow(trainSet3), prob=c(0.7,0.3), replace=TRUE)
+training<-trainSet3[intrain==1,]
+validation<-trainSet3[intrain==2,]
+```
+### Modeling procedure selection and prediction
+
+Once a clean dataset was obtained, correlation between the variables (predictors) in the dataset was determined for the numeric (not factor) predictors in the dataset. 
+
+```{r correlation, warning=FALSE, message=FALSE}
+trainingcor<-training
+trainingcor$classe<-NULL# remove the y variable column
+trainingcor$user_name<-NULL# remove the factor column
+cor1<-round(cor(trainingcor),2)# prepare a correlation matrix
+
+```
+
+```{r plot, eval=FALSE}
+corrplot(cor1)
+```
+**Figure-1 Correlation plot of the predictor variables**
+![Figure-1: Correlation of Predictor Variables](H:/Personal/Continuing Education/Data Scientist Specialization/Practical Machine Learning/Rplot.png)
+
+As seen in the plot there are several variables that are highly correlated (intense red and blue colors). Some regression techniques will not be able to handle such highly correlated variables. Classification methods like random forest which have the ability to be robust in the presence of correlated predictors would be suitable for modeling this data. A random forest model was fit to the training dataset. The results from the random forest fit are shown below.
+
+```{r rf, eval=FALSE}
+library(randomForest)
+library(caret)
+set.seed(12345)
+training<-na.omit(training)
+modelFit1<-train(classe~.,data=training, method="rf")
+modelFit1
+```
+
+The results of the model fit accuracy are presented below
+![](H:/Personal/Continuing Education/Data Scientist Specialization/Practical Machine Learning/RandomForestFitResult.png)
+
+The model was then applied to the validation dataset and the prediction accuracy of the model was checked.
+```{r validation, eval=FALSE}
+pred<-predict(modelFit1,validation)
+confusionMatrix(validation$classe,pred)
+
+```
+The results of the model fit accuracy for the validation dataset are presented below
+![](H:/Personal/Continuing Education/Data Scientist Specialization/Practical Machine Learning/PredictionAccuracy.png)
+
+##Prediction of Test Cases
+The final model was applied to the test dataset and used to predict the class of the test obserrvations.
+```{r testpred, eval=FALSE}
+pred2<-predict(modelFit1, testSet)
+pred2
+```
+The predictions for the test cases are 
+[1] B A B A A E D B A A B C B A E E A B B B
+Levels: A B C D E
+
+All the test cases were accurately predicted by the model. 
